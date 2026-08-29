@@ -1,0 +1,25 @@
+{
+  "servers": [
+    {
+      "name": "filesystem",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "./workspace"],
+      "description": "Official Anthropic Filesystem MCP server, sandboxed to ./workspace."
+    },
+    {
+      "name": "git",
+      "transport": "stdio",
+      "command": "uvx",
+      "args": ["mcp-server-git"],
+      "description": "Official Anthropic Git MCP server."
+    },
+    {
+      "name": "lims",
+      "transport": "stdio",
+      "command": "python",
+      "args": ["-m", "lims_mcp_server.server"],
+      "description": "Custom local LIMS food-safety lab MCP server (this repository)."
+    }
+  ]
+}

@@ -50,6 +50,15 @@ assignment): the chatbot host itself, the Filesystem/Git official MCP
 servers, the remote (Cloud Run) deployment of this same server, and the
 Wireshark traffic analysis.
 
+## Project status
+
+- [x] Local LIMS MCP server (`lims_mcp_server/`), manual JSON-RPC over stdio
+- [x] Generic MCP client + interaction logger (`chatbot/`), verified against the LIMS server (`chatbot/tests/test_stdio_client.py`)
+- [ ] Anthropic API chatbot host, session context, Filesystem + Git MCP demo scenario
+- [ ] Remote LIMS MCP server over HTTP + SSE, deployed to Google Cloud Run
+- [ ] Wireshark capture and JSON-RPC message classification
+- [ ] Final report (spec, OSI/TCP-IP layer analysis, conclusions)
+
 ## Requirements
 
 - Python 3.10 or later

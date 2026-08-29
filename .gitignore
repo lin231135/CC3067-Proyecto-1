@@ -7,5 +7,9 @@ env/
 .pytest_cache/
 data/*.db
 data/*.db-journal
+data/logs/*.jsonl
+workspace/*
+!workspace/.gitkeep
+.env
 .DS_Store
 *.log

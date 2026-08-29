@@ -59,6 +59,15 @@ con los servidores oficiales Filesystem/Git MCP, el despliegue remoto
 (Cloud Run) de este mismo servidor, y el análisis de tráfico con
 Wireshark.
 
+## Estado del proyecto
+
+- [x] Servidor MCP local LIMS (`lims_mcp_server/`), JSON-RPC manual sobre stdio
+- [x] Cliente MCP genérico + logger de interacciones (`chatbot/`), verificado contra el servidor LIMS (`chatbot/tests/test_stdio_client.py`)
+- [ ] Chatbot host con API de Anthropic, contexto de sesión, escenario demo Filesystem + Git MCP
+- [ ] Servidor LIMS remoto sobre HTTP + SSE, desplegado en Google Cloud Run
+- [ ] Captura con Wireshark y clasificación de mensajes JSON-RPC
+- [ ] Reporte final (especificación, análisis de capas OSI/TCP-IP, conclusiones)
+
 ## Requisitos
 
 - Python 3.10 o superior
