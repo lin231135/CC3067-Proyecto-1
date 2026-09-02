@@ -6,6 +6,7 @@ on the other end. Because it only depends on the wire protocol, this same
 class talks to the official Filesystem and Git MCP servers just as well
 as it talks to our own lims_mcp_server -- no per-server special casing.
 """
+import shutil
 import subprocess
 
 from .jsonrpc_client import make_notification, make_request, read_message, write_message
@@ -23,8 +24,13 @@ class MCPStdioClient:
         self.name = name
         self.logger = logger
         self.tools = []
+        # On Windows, npx/uvx/etc. are .cmd/.exe shims that Popen only finds
+        # via shutil.which (PATHEXT-aware); plain PATH lookup without a
+        # shell fails with WinError 2. which() is a no-op passthrough on
+        # POSIX for a name that's already directly executable.
+        resolved_command = shutil.which(command) or command
         self.proc = subprocess.Popen(
-            [command, *(args or [])],
+            [resolved_command, *(args or [])],
             cwd=cwd,
             env=env,
             stdin=subprocess.PIPE,

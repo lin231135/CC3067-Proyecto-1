@@ -54,7 +54,7 @@ Wireshark traffic analysis.
 
 - [x] Local LIMS MCP server (`lims_mcp_server/`), manual JSON-RPC over stdio
 - [x] Generic MCP client + interaction logger (`chatbot/`), verified against the LIMS server (`chatbot/tests/test_stdio_client.py`)
-- [ ] Anthropic API chatbot host, session context, Filesystem + Git MCP demo scenario
+- [x] Anthropic API chatbot host, session context, Filesystem + Git MCP demo scenario
 - [ ] Remote LIMS MCP server over HTTP + SSE, deployed to Google Cloud Run
 - [ ] Wireshark capture and JSON-RPC message classification
 - [ ] Final report (spec, OSI/TCP-IP layer analysis, conclusions)
@@ -152,6 +152,87 @@ to your `claude_desktop_config.json` (adjust the path to your clone):
 Restart Claude Desktop and ask it something like *"What food samples are
 pending results?"* -- it should call `list_pending_samples` automatically.
 
+## Chatbot host
+
+`chatbot/` is the MCP **host**: a console chatbot that talks to the
+Anthropic Messages API directly over HTTPS (`urllib`, no `anthropic` pip
+package) and orchestrates three MCP servers at once, all connected
+through the same hand-built stdio client (`chatbot/mcp/`):
+
+| Server | Role | Command |
+|---|---|---|
+| `filesystem` | Official Anthropic Filesystem MCP server, sandboxed to `./workspace` | `npx -y @modelcontextprotocol/server-filesystem ./workspace` |
+| `git` | Official Anthropic Git MCP server | `uvx mcp-server-git` |
+| `lims` | This repository's own local server | `python -m lims_mcp_server.server` |
+
+Features: connects with the LLM at the raw API level, keeps full
+conversation context across turns (multi-server tool-use loop), and logs
+every MCP request/response (`InteractionLogger`, viewable in-session with
+`/log`).
+
+### Prerequisites
+
+- **Node.js** (for `npx`, which runs the Filesystem server) --
+  https://nodejs.org
+- **uv** (for `uvx`, which runs the Git server) --
+  https://docs.astral.sh/uv/getting-started/installation/
+- An **Anthropic API key** -- create one at
+  https://console.anthropic.com/ (the assignment notes $5 of free credit
+  is enough for this project)
+
+### Setup
+
+Copy `.env.example` to `.env` and fill in your key (or export the same
+variables directly in your shell -- both work, `.env` is git-ignored):
+
+```bash
+cp .env.example .env
+# then edit .env and set ANTHROPIC_API_KEY=sk-ant-...
+```
+
+### Run it
+
+```bash
+python -m chatbot.host
+```
+
+On startup the host connects to all three servers (skipping any that
+fail to start, with a warning) and prints how many tools it found. Try
+the assignment's required demo scenario:
+
+```
+You: In the demo-repo git repository, create a README.md that briefly
+     describes the LIMS food-safety project, stage it, and commit it
+     with an appropriate message.
+```
+
+The model will call `write_file` (Filesystem server) to create the file,
+then `git_add` and `git_commit` (Git server) to stage and commit it --
+you'll see each tool call printed to the console as it happens. You can
+also ask LIMS questions in the same session (e.g. *"What samples are
+pending results?"*) and general-knowledge questions (e.g. *"Who was Alan
+Turing?"* followed by *"When was he born?"*, to see session context
+carried across turns).
+
+In-session commands: `/tools` (list every discovered tool and which
+server owns it), `/log` (dump the full MCP interaction log for this
+session), `/exit`.
+
+### A note on the demo scenario
+
+The publicly published build of the official Git MCP server (`uvx
+mcp-server-git`, v1.30.0) does not expose a `git_init` tool -- verified
+directly against its `tools/list` response and its installed source
+(`git_status`, `git_diff*`, `git_commit`, `git_add`, `git_reset`,
+`git_log`, `git_create_branch`, `git_checkout`, `git_show`, `git_branch`
+is the complete list; no init handler exists). Since the chatbot cannot
+create a git repository through a tool the server doesn't offer,
+`chatbot/host.py` bootstraps an empty git repository at
+`workspace/demo-repo` on startup with a direct `git init` call. Every
+step after that -- writing the README, staging it, committing it -- is
+still performed by the LLM through the official Filesystem and Git MCP
+servers, exactly as the assignment asks.
+
 ## Project structure
 
 ```
@@ -164,28 +245,50 @@ CC3067-Proyecto-1/
 |   |-- database.py       # SQLite connection management
 |   |-- schema.sql         # table definitions
 |   `-- seed.py           # synthetic demo data generator
+|-- chatbot/
+|   |-- host.py           # console chatbot host (entry point: python -m chatbot.host)
+|   |-- anthropic_client.py  # raw HTTPS Anthropic Messages API client
+|   |-- logging_utils.py  # InteractionLogger (MCP request/response log)
+|   |-- servers_config.json  # the 3 MCP servers the host connects to
+|   `-- mcp/
+|       |-- jsonrpc_client.py  # client-side JSON-RPC 2.0 helpers
+|       `-- stdio_client.py    # generic MCP client over a subprocess's stdio
 |-- tests/
-|   `-- manual_client.py  # end-to-end JSON-RPC demo/test script
+|   `-- manual_client.py  # end-to-end JSON-RPC demo/test script for lims_mcp_server
+|-- chatbot/tests/
+|   `-- test_stdio_client.py  # smoke test for the generic MCP client
 |-- docs/
 |   `-- lims_mcp_server_spec.md  # full tool/protocol specification
-|-- data/                 # data/lims.db is created here (git-ignored)
+|-- data/                 # data/lims.db and logs/ are created here (git-ignored)
+|-- workspace/            # sandbox root for the Filesystem/Git MCP demo (git-ignored)
 `-- README.md
 ```
 
 ## Design notes
 
 - **No MCP SDK.** Per the assignment's explicit requirement, the protocol
-  is implemented manually: `jsonrpc.py` handles raw message framing and
-  JSON-RPC 2.0 error codes, `protocol.py` implements the MCP-specific
-  method semantics (`initialize` handshake, `tools/list`, `tools/call`),
-  and `server.py` ties them to stdio.
-- **Tool errors vs. protocol errors.** A bad or missing sample code is
-  reported inside a normal `tools/call` result (`isError: true`), not as
-  a JSON-RPC error -- this matches the MCP spec's guidance so an LLM host
-  can see the failure and react to it in conversation.
-- **stdio framing.** Each JSON-RPC message is exactly one line; the
-  server never writes anything except protocol messages to stdout, so
-  logging goes to stderr instead.
+  is implemented manually on both ends: `lims_mcp_server/jsonrpc.py` and
+  `chatbot/mcp/jsonrpc_client.py` handle raw message framing and JSON-RPC
+  2.0 error codes, `protocol.py` implements the MCP-specific method
+  semantics server-side, and `chatbot/mcp/stdio_client.py` implements the
+  handshake/discovery/invocation sequence client-side.
+- **No Anthropic SDK either.** `chatbot/anthropic_client.py` calls the
+  Messages API with plain `urllib` HTTPS requests, in line with objective
+  #5 of the assignment (understand how to interact with an LLM at the API
+  level) and keeping the project dependency-free.
+- **Tool errors vs. protocol errors.** A bad or missing sample code (or
+  any other tool-level failure) is reported inside a normal `tools/call`
+  result (`isError: true`), not as a JSON-RPC error -- this matches the
+  MCP spec's guidance so an LLM host can see the failure and react to it
+  in conversation.
+- **stdio framing.** Each JSON-RPC message is exactly one line; servers
+  never write anything except protocol messages to stdout, so logging
+  goes to stderr instead.
+- **Windows subprocess quirk.** `npx`/`uvx` are `.cmd`/`.exe` shims;
+  `subprocess.Popen` without `shell=True` fails to find them via a plain
+  `PATH` lookup on Windows (`WinError 2`). `stdio_client.py` resolves the
+  command with `shutil.which()` first, which is PATHEXT-aware on Windows
+  and a no-op on POSIX.
 
 ## Academic integrity
 

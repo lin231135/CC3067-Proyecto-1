@@ -63,7 +63,7 @@ Wireshark.
 
 - [x] Servidor MCP local LIMS (`lims_mcp_server/`), JSON-RPC manual sobre stdio
 - [x] Cliente MCP genérico + logger de interacciones (`chatbot/`), verificado contra el servidor LIMS (`chatbot/tests/test_stdio_client.py`)
-- [ ] Chatbot host con API de Anthropic, contexto de sesión, escenario demo Filesystem + Git MCP
+- [x] Chatbot host con API de Anthropic, contexto de sesión, escenario demo Filesystem + Git MCP
 - [ ] Servidor LIMS remoto sobre HTTP + SSE, desplegado en Google Cloud Run
 - [ ] Captura con Wireshark y clasificación de mensajes JSON-RPC
 - [ ] Reporte final (especificación, análisis de capas OSI/TCP-IP, conclusiones)
@@ -165,6 +165,90 @@ Reinicia Claude Desktop y pregúntale algo como *"¿Qué muestras de
 alimentos están pendientes de resultado?"* -- debería invocar
 `list_pending_samples` automáticamente.
 
+## Chatbot host
+
+`chatbot/` es el **anfitrión** de MCP: un chatbot de consola que habla
+directamente con la API de Anthropic por HTTPS (`urllib`, sin el paquete
+`anthropic`) y orquesta tres servidores MCP a la vez, todos conectados a
+través del mismo cliente stdio hecho a mano (`chatbot/mcp/`):
+
+| Servidor | Rol | Comando |
+|---|---|---|
+| `filesystem` | Servidor oficial Filesystem MCP de Anthropic, restringido a `./workspace` | `npx -y @modelcontextprotocol/server-filesystem ./workspace` |
+| `git` | Servidor oficial Git MCP de Anthropic | `uvx mcp-server-git` |
+| `lims` | Servidor propio de este repositorio | `python -m lims_mcp_server.server` |
+
+Funcionalidades: se conecta con el LLM a nivel de API cruda, mantiene el
+contexto completo de la conversación entre turnos (loop de tool-use
+multi-servidor), y registra cada solicitud/respuesta MCP
+(`InteractionLogger`, visible en la sesión con `/log`).
+
+### Requisitos previos
+
+- **Node.js** (para `npx`, que ejecuta el servidor Filesystem) --
+  https://nodejs.org
+- **uv** (para `uvx`, que ejecuta el servidor Git) --
+  https://docs.astral.sh/uv/getting-started/installation/
+- Una **API key de Anthropic** -- créala en
+  https://console.anthropic.com/ (el enunciado indica que $5 de crédito
+  gratis son suficientes para este proyecto)
+
+### Configuración
+
+Copia `.env.example` a `.env` y coloca tu llave (o exporta las mismas
+variables directamente en tu shell -- ambas opciones funcionan, `.env`
+está ignorado por git):
+
+```bash
+cp .env.example .env
+# luego edita .env y coloca ANTHROPIC_API_KEY=sk-ant-...
+```
+
+### Ejecutarlo
+
+```bash
+python -m chatbot.host
+```
+
+Al iniciar, el host se conecta a los tres servidores (omitiendo con una
+advertencia cualquiera que falle al arrancar) e imprime cuántas
+herramientas encontró. Prueba el escenario demo que pide el enunciado:
+
+```
+You: In the demo-repo git repository, create a README.md that briefly
+     describes the LIMS food-safety project, stage it, and commit it
+     with an appropriate message.
+```
+
+El modelo llamará a `write_file` (servidor Filesystem) para crear el
+archivo, y luego a `git_add` y `git_commit` (servidor Git) para
+agregarlo y comitearlo -- verás cada llamada a herramienta impresa en la
+consola conforme ocurre. En la misma sesión también puedes hacer
+preguntas sobre el LIMS (p. ej. *"¿Qué muestras están pendientes de
+resultado?"*) y preguntas de conocimiento general (p. ej. *"¿Quién fue
+Alan Turing?"* seguido de *"¿En qué fecha nació?"*, para ver el contexto
+de sesión mantenido entre turnos).
+
+Comandos dentro de la sesión: `/tools` (lista cada herramienta
+descubierta y a qué servidor pertenece), `/log` (muestra el log completo
+de interacciones MCP de la sesión), `/exit`.
+
+### Una nota sobre el escenario demo
+
+La versión públicamente disponible del servidor oficial Git MCP (`uvx
+mcp-server-git`, v1.30.0) **no expone una herramienta `git_init`** --
+verificado directamente contra su respuesta de `tools/list` y su código
+fuente instalado (la lista completa es `git_status`, `git_diff*`,
+`git_commit`, `git_add`, `git_reset`, `git_log`, `git_create_branch`,
+`git_checkout`, `git_show`, `git_branch`; no existe ningún handler de
+init). Como el chatbot no puede crear un repositorio git a través de una
+herramienta que el servidor no ofrece, `chatbot/host.py` inicializa un
+repositorio git vacío en `workspace/demo-repo` al arrancar, con una
+llamada directa a `git init`. Todo lo que ocurre después -- escribir el
+README, agregarlo, comitearlo -- lo sigue haciendo el LLM a través de los
+servidores oficiales Filesystem y Git MCP, tal como lo pide el
+enunciado.
+
 ## Estructura del proyecto
 
 ```
@@ -177,11 +261,22 @@ CC3067-Proyecto-1/
 |   |-- database.py       # manejo de la conexión SQLite
 |   |-- schema.sql         # definición de tablas
 |   `-- seed.py           # generador de datos sintéticos de demo
+|-- chatbot/
+|   |-- host.py           # chatbot host de consola (entrada: python -m chatbot.host)
+|   |-- anthropic_client.py  # cliente HTTPS crudo para la API de Anthropic
+|   |-- logging_utils.py  # InteractionLogger (log de solicitudes/respuestas MCP)
+|   |-- servers_config.json  # los 3 servidores MCP a los que se conecta el host
+|   `-- mcp/
+|       |-- jsonrpc_client.py  # helpers de JSON-RPC 2.0 del lado cliente
+|       `-- stdio_client.py    # cliente MCP genérico sobre el stdio de un subproceso
 |-- tests/
-|   `-- manual_client.py  # script de prueba/demo JSON-RPC de punta a punta
+|   `-- manual_client.py  # script de prueba/demo JSON-RPC de punta a punta para lims_mcp_server
+|-- chatbot/tests/
+|   `-- test_stdio_client.py  # smoke test del cliente MCP genérico
 |-- docs/
 |   `-- lims_mcp_server_spec.md  # especificación completa del protocolo/herramientas
-|-- data/                 # aquí se crea data/lims.db (ignorado por git)
+|-- data/                 # aquí se crean data/lims.db y logs/ (ignorado por git)
+|-- workspace/            # raíz sandbox para la demo Filesystem/Git MCP (ignorado por git)
 |-- README.md             # documentación oficial (en inglés, requerido por el enunciado)
 `-- README.es.md          # este archivo
 ```
@@ -189,18 +284,30 @@ CC3067-Proyecto-1/
 ## Notas de diseño
 
 - **Sin SDK de MCP.** Según lo exige el enunciado, el protocolo está
-  implementado a mano: `jsonrpc.py` maneja el framing crudo de mensajes y
+  implementado a mano en ambos lados: `lims_mcp_server/jsonrpc.py` y
+  `chatbot/mcp/jsonrpc_client.py` manejan el framing crudo de mensajes y
   los códigos de error de JSON-RPC 2.0, `protocol.py` implementa la
-  semántica específica de MCP (`initialize`, `tools/list`, `tools/call`),
-  y `server.py` los conecta con stdio.
+  semántica específica de MCP del lado del servidor, y
+  `chatbot/mcp/stdio_client.py` implementa el handshake/descubrimiento/
+  invocación del lado del cliente.
+- **Tampoco se usa el SDK de Anthropic.** `chatbot/anthropic_client.py`
+  llama a la API de Messages con solicitudes HTTPS crudas vía `urllib`,
+  en línea con el objetivo #5 del enunciado (comprender cómo interactuar
+  con un LLM a nivel de API) y manteniendo el proyecto sin dependencias.
 - **Errores de herramienta vs. errores de protocolo.** Un código de
-  muestra inválido o inexistente se reporta dentro de un resultado normal
-  de `tools/call` (`isError: true`), no como un error de JSON-RPC --
-  esto sigue la convención de MCP para que el LLM anfitrión pueda ver el
-  fallo y reaccionar en la conversación.
+  muestra inválido o inexistente (o cualquier otro fallo a nivel de
+  herramienta) se reporta dentro de un resultado normal de `tools/call`
+  (`isError: true`), no como un error de JSON-RPC -- esto sigue la
+  convención de MCP para que el LLM anfitrión pueda ver el fallo y
+  reaccionar en la conversación.
 - **Framing de stdio.** Cada mensaje JSON-RPC ocupa exactamente una
-  línea; el servidor nunca escribe nada que no sea un mensaje de
+  línea; los servidores nunca escriben nada que no sea un mensaje de
   protocolo en stdout, por eso los logs van a stderr.
+- **Particularidad de Windows con subprocess.** `npx`/`uvx` son shims
+  `.cmd`/`.exe`; `subprocess.Popen` sin `shell=True` no los encuentra con
+  una búsqueda simple en `PATH` en Windows (`WinError 2`).
+  `stdio_client.py` resuelve el comando con `shutil.which()` primero, que
+  es consciente de `PATHEXT` en Windows y no hace nada en POSIX.
 
 ## Integridad académica
 
