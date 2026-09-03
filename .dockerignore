@@ -1,0 +1,13 @@
+.git/
+.venv/
+venv/
+__pycache__/
+*.pyc
+data/
+chatbot/
+tests/
+docs/
+workspace/
+*.md
+.env
+.env.example

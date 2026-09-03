@@ -55,7 +55,8 @@ Wireshark traffic analysis.
 - [x] Local LIMS MCP server (`lims_mcp_server/`), manual JSON-RPC over stdio
 - [x] Generic MCP client + interaction logger (`chatbot/`), verified against the LIMS server (`chatbot/tests/test_stdio_client.py`)
 - [x] Anthropic API chatbot host, session context, Filesystem + Git MCP demo scenario
-- [ ] Remote LIMS MCP server over HTTP + SSE, deployed to Google Cloud Run
+- [x] Remote transport for the LIMS server (HTTP + SSE, manual, same tools/business logic as the stdio server) + Dockerfile
+- [ ] Actual deployment to Google Cloud Run (needs your GCP account -- see below)
 - [ ] Wireshark capture and JSON-RPC message classification
 - [ ] Final report (spec, OSI/TCP-IP layer analysis, conclusions)
 
@@ -233,6 +234,62 @@ step after that -- writing the README, staging it, committing it -- is
 still performed by the LLM through the official Filesystem and Git MCP
 servers, exactly as the assignment asks.
 
+## Remote transport (HTTP + SSE)
+
+`lims_mcp_server/http_server.py` is the **same server** (`protocol.py`,
+`tools.py`, `database.py` are untouched and shared) exposed over a
+different, manually-implemented transport: MCP's "Streamable HTTP"
+transport, hand-built on Python's stdlib `http.server` (no Flask/FastAPI,
+no MCP SDK).
+
+- `POST /mcp` -- send one JSON-RPC message per request. A request (has
+  `id`) gets back `200` with `Content-Type: text/event-stream` (a single
+  SSE `event: message` frame carrying the JSON-RPC response); a
+  notification (no `id`) gets back `202 Accepted` with an empty body.
+- `initialize` responds with an `Mcp-Session-Id` header; every later call
+  must echo that header back, or the server answers `400` (missing) /
+  `404` (unknown session) -- verified with `curl` during development.
+- `GET /health` is a plain liveness probe for Cloud Run. `GET /mcp`
+  intentionally returns `405`: every LIMS tool is a quick synchronous
+  call, so the server never needs the optional server-initiated push
+  stream the spec also allows for.
+- `chatbot/mcp/http_client.py` is the client-side counterpart -- same
+  shape as the stdio client (`initialize`, `call_tool`, `.tools`,
+  `close`), so `chatbot/host.py` uses a local (stdio) or a remote (HTTP)
+  MCP server identically, exactly as the assignment requires.
+
+### Run it locally
+
+```bash
+python -m lims_mcp_server.http_server
+# in another terminal:
+curl http://localhost:8080/health
+```
+
+### Run it in Docker locally
+
+```bash
+docker build -t lims-mcp-server .
+docker run --rm -p 8080:8080 lims-mcp-server
+curl http://localhost:8080/health
+```
+
+### Use it from the chatbot
+
+Edit `chatbot/servers_config.json`: set `"enabled": false` on the local
+`lims` entry and `"enabled": true` (with the real `base_url`) on
+`lims-remote`, then run `python -m chatbot.host` as usual -- the host
+doesn't need any other change, since both clients implement the same
+interface.
+
+### Deploying to Google Cloud Run
+
+Deploying requires your own Google Cloud account and `gcloud` CLI login,
+so it has to be run by you, not from here. See
+[`docs/deployment.md`](docs/deployment.md) for the full step-by-step
+guide (build, push, `gcloud run deploy`, and how to plug the resulting
+URL into `servers_config.json`).
+
 ## Project structure
 
 ```
@@ -244,21 +301,25 @@ CC3067-Proyecto-1/
 |   |-- tools.py          # the 5 domain tools + their JSON Schemas
 |   |-- database.py       # SQLite connection management
 |   |-- schema.sql         # table definitions
-|   `-- seed.py           # synthetic demo data generator
+|   |-- seed.py           # synthetic demo data generator
+|   `-- http_server.py    # remote transport: HTTP + SSE (entry point for Cloud Run)
 |-- chatbot/
 |   |-- host.py           # console chatbot host (entry point: python -m chatbot.host)
 |   |-- anthropic_client.py  # raw HTTPS Anthropic Messages API client
 |   |-- logging_utils.py  # InteractionLogger (MCP request/response log)
-|   |-- servers_config.json  # the 3 MCP servers the host connects to
+|   |-- servers_config.json  # the MCP servers the host connects to (local + remote)
 |   `-- mcp/
 |       |-- jsonrpc_client.py  # client-side JSON-RPC 2.0 helpers
-|       `-- stdio_client.py    # generic MCP client over a subprocess's stdio
+|       |-- stdio_client.py    # generic MCP client over a subprocess's stdio
+|       `-- http_client.py     # generic MCP client over HTTP + SSE
 |-- tests/
 |   `-- manual_client.py  # end-to-end JSON-RPC demo/test script for lims_mcp_server
 |-- chatbot/tests/
 |   `-- test_stdio_client.py  # smoke test for the generic MCP client
 |-- docs/
-|   `-- lims_mcp_server_spec.md  # full tool/protocol specification
+|   |-- lims_mcp_server_spec.md  # full tool/protocol specification
+|   `-- deployment.md            # Google Cloud Run deployment walkthrough
+|-- Dockerfile             # container image for the remote server
 |-- data/                 # data/lims.db and logs/ are created here (git-ignored)
 |-- workspace/            # sandbox root for the Filesystem/Git MCP demo (git-ignored)
 `-- README.md
@@ -289,6 +350,13 @@ CC3067-Proyecto-1/
   `PATH` lookup on Windows (`WinError 2`). `stdio_client.py` resolves the
   command with `shutil.which()` first, which is PATHEXT-aware on Windows
   and a no-op on POSIX.
+- **One business logic, two transports.** `http_server.py` imports and
+  calls `protocol.METHOD_HANDLERS` directly -- the exact same dispatch
+  table `server.py` uses over stdio -- so the remote server is
+  guaranteed to behave identically to the local one; only message
+  framing (newline-delimited stdio vs. HTTP + SSE) and session handling
+  differ. `ThreadingHTTPServer` serves requests concurrently, so a single
+  lock serializes access to the shared SQLite connection across threads.
 
 ## Academic integrity
 

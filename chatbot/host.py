@@ -16,6 +16,7 @@ from pathlib import Path
 
 from .anthropic_client import AnthropicClient, AnthropicError
 from .logging_utils import InteractionLogger
+from .mcp.http_client import MCPHTTPClient
 from .mcp.stdio_client import MCPError, MCPStdioClient
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -83,15 +84,20 @@ def load_servers_config():
 def connect_servers(logger):
     clients = {}
     for entry in load_servers_config():
+        if not entry.get("enabled", True):
+            continue
         name = entry["name"]
         try:
-            client = MCPStdioClient(
-                name=name,
-                command=entry["command"],
-                args=entry.get("args", []),
-                cwd=str(REPO_ROOT),
-                logger=logger,
-            )
+            if entry.get("transport") == "http":
+                client = MCPHTTPClient(name=name, base_url=entry["base_url"], logger=logger)
+            else:
+                client = MCPStdioClient(
+                    name=name,
+                    command=entry["command"],
+                    args=entry.get("args", []),
+                    cwd=str(REPO_ROOT),
+                    logger=logger,
+                )
             client.initialize()
             clients[name] = client
             print(f"[host] Connected to '{name}' ({len(client.tools)} tools).", file=sys.stderr)

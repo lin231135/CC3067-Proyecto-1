@@ -64,7 +64,8 @@ Wireshark.
 - [x] Servidor MCP local LIMS (`lims_mcp_server/`), JSON-RPC manual sobre stdio
 - [x] Cliente MCP genérico + logger de interacciones (`chatbot/`), verificado contra el servidor LIMS (`chatbot/tests/test_stdio_client.py`)
 - [x] Chatbot host con API de Anthropic, contexto de sesión, escenario demo Filesystem + Git MCP
-- [ ] Servidor LIMS remoto sobre HTTP + SSE, desplegado en Google Cloud Run
+- [x] Transporte remoto para el servidor LIMS (HTTP + SSE, manual, misma lógica/tools que el servidor stdio) + Dockerfile
+- [ ] Despliegue real en Google Cloud Run (requiere tu cuenta de GCP -- ver abajo)
 - [ ] Captura con Wireshark y clasificación de mensajes JSON-RPC
 - [ ] Reporte final (especificación, análisis de capas OSI/TCP-IP, conclusiones)
 
@@ -249,6 +250,63 @@ README, agregarlo, comitearlo -- lo sigue haciendo el LLM a través de los
 servidores oficiales Filesystem y Git MCP, tal como lo pide el
 enunciado.
 
+## Transporte remoto (HTTP + SSE)
+
+`lims_mcp_server/http_server.py` es **el mismo servidor** (`protocol.py`,
+`tools.py`, `database.py` no cambian, se comparten) expuesto sobre un
+transporte distinto, implementado a mano: el transporte "Streamable
+HTTP" de MCP, construido sobre `http.server` de la librería estándar
+(sin Flask/FastAPI, sin SDK de MCP).
+
+- `POST /mcp` -- envía un mensaje JSON-RPC por solicitud. Una solicitud
+  (tiene `id`) recibe `200` con `Content-Type: text/event-stream` (un
+  único frame SSE `event: message` con la respuesta JSON-RPC); una
+  notificación (sin `id`) recibe `202 Accepted` con cuerpo vacío.
+- `initialize` responde con un header `Mcp-Session-Id`; cada llamada
+  posterior debe reenviar ese header, o el servidor responde `400`
+  (falta) / `404` (sesión desconocida) -- verificado con `curl` durante
+  el desarrollo.
+- `GET /health` es un liveness probe simple para Cloud Run. `GET /mcp`
+  responde `405` a propósito: cada tool de LIMS es una llamada síncrona
+  rápida, así que el servidor nunca necesita el stream opcional de
+  mensajes iniciados por el servidor que también permite el spec.
+- `chatbot/mcp/http_client.py` es la contraparte del lado del cliente --
+  misma forma que el cliente stdio (`initialize`, `call_tool`, `.tools`,
+  `close`), así que `chatbot/host.py` usa un servidor MCP local (stdio) o
+  remoto (HTTP) de forma idéntica, tal como lo exige el enunciado.
+
+### Ejecutarlo localmente
+
+```bash
+python -m lims_mcp_server.http_server
+# en otra terminal:
+curl http://localhost:8080/health
+```
+
+### Ejecutarlo en Docker localmente
+
+```bash
+docker build -t lims-mcp-server .
+docker run --rm -p 8080:8080 lims-mcp-server
+curl http://localhost:8080/health
+```
+
+### Usarlo desde el chatbot
+
+Edita `chatbot/servers_config.json`: pon `"enabled": false` en la entrada
+local `lims` y `"enabled": true` (con el `base_url` real) en
+`lims-remote`, luego ejecuta `python -m chatbot.host` normalmente -- el
+host no necesita ningún otro cambio, ya que ambos clientes implementan
+la misma interfaz.
+
+### Desplegar en Google Cloud Run
+
+El despliegue requiere tu propia cuenta de Google Cloud y sesión iniciada
+en `gcloud`, así que debes ejecutarlo tú, no yo. Ver
+[`docs/deployment.md`](docs/deployment.md) para la guía completa paso a
+paso (build, push, `gcloud run deploy`, y cómo conectar la URL resultante
+en `servers_config.json`).
+
 ## Estructura del proyecto
 
 ```
@@ -260,21 +318,25 @@ CC3067-Proyecto-1/
 |   |-- tools.py          # las 5 herramientas del dominio + sus JSON Schemas
 |   |-- database.py       # manejo de la conexión SQLite
 |   |-- schema.sql         # definición de tablas
-|   `-- seed.py           # generador de datos sintéticos de demo
+|   |-- seed.py           # generador de datos sintéticos de demo
+|   `-- http_server.py    # transporte remoto: HTTP + SSE (entrada para Cloud Run)
 |-- chatbot/
 |   |-- host.py           # chatbot host de consola (entrada: python -m chatbot.host)
 |   |-- anthropic_client.py  # cliente HTTPS crudo para la API de Anthropic
 |   |-- logging_utils.py  # InteractionLogger (log de solicitudes/respuestas MCP)
-|   |-- servers_config.json  # los 3 servidores MCP a los que se conecta el host
+|   |-- servers_config.json  # servidores MCP a los que se conecta el host (local + remoto)
 |   `-- mcp/
 |       |-- jsonrpc_client.py  # helpers de JSON-RPC 2.0 del lado cliente
-|       `-- stdio_client.py    # cliente MCP genérico sobre el stdio de un subproceso
+|       |-- stdio_client.py    # cliente MCP genérico sobre el stdio de un subproceso
+|       `-- http_client.py     # cliente MCP genérico sobre HTTP + SSE
 |-- tests/
 |   `-- manual_client.py  # script de prueba/demo JSON-RPC de punta a punta para lims_mcp_server
 |-- chatbot/tests/
 |   `-- test_stdio_client.py  # smoke test del cliente MCP genérico
 |-- docs/
-|   `-- lims_mcp_server_spec.md  # especificación completa del protocolo/herramientas
+|   |-- lims_mcp_server_spec.md  # especificación completa del protocolo/herramientas
+|   `-- deployment.md            # guía de despliegue en Google Cloud Run
+|-- Dockerfile             # imagen de contenedor para el servidor remoto
 |-- data/                 # aquí se crean data/lims.db y logs/ (ignorado por git)
 |-- workspace/            # raíz sandbox para la demo Filesystem/Git MCP (ignorado por git)
 |-- README.md             # documentación oficial (en inglés, requerido por el enunciado)
@@ -308,6 +370,14 @@ CC3067-Proyecto-1/
   una búsqueda simple en `PATH` en Windows (`WinError 2`).
   `stdio_client.py` resuelve el comando con `shutil.which()` primero, que
   es consciente de `PATHEXT` en Windows y no hace nada en POSIX.
+- **Una sola lógica de negocio, dos transportes.** `http_server.py`
+  importa y llama directamente a `protocol.METHOD_HANDLERS` -- la misma
+  tabla de despacho que usa `server.py` sobre stdio -- así que el
+  servidor remoto se comporta de forma idéntica al local; solo difieren
+  el framing de mensajes (stdio con saltos de línea vs. HTTP + SSE) y el
+  manejo de sesión. `ThreadingHTTPServer` atiende solicitudes de forma
+  concurrente, por lo que un lock serializa el acceso a la conexión
+  SQLite compartida entre hilos.
 
 ## Integridad académica
 

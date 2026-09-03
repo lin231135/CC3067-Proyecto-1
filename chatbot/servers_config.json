@@ -20,6 +20,13 @@
       "command": "python",
       "args": ["-m", "lims_mcp_server.server"],
       "description": "Custom local LIMS food-safety lab MCP server (this repository)."
+    },
+    {
+      "name": "lims-remote",
+      "transport": "http",
+      "enabled": false,
+      "base_url": "https://REPLACE-WITH-YOUR-CLOUD-RUN-URL.run.app",
+      "description": "Same LIMS server as 'lims', deployed remotely over HTTP+SSE (Google Cloud Run). Disabled until you deploy it and fill in base_url -- see the README's remote deployment section. Enable this and disable 'lims' to make the chatbot use the remote server instead of the local one."
     }
   ]
 }
