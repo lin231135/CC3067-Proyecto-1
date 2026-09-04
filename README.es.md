@@ -66,7 +66,7 @@ Wireshark.
 - [x] Chatbot host con API de Anthropic, contexto de sesión, escenario demo Filesystem + Git MCP
 - [x] Transporte remoto para el servidor LIMS (HTTP + SSE, manual, misma lógica/tools que el servidor stdio) + Dockerfile
 - [ ] Despliegue real en Google Cloud Run (requiere tu cuenta de GCP -- ver abajo)
-- [ ] Captura con Wireshark y clasificación de mensajes JSON-RPC
+- [x] Captura con Wireshark y clasificación de mensajes JSON-RPC (captura local de referencia; repetir contra el despliegue real en Cloud Run para la entrega final -- ver `docs/wireshark_analysis.md`)
 - [ ] Reporte final (especificación, análisis de capas OSI/TCP-IP, conclusiones)
 
 ## Requisitos
@@ -307,6 +307,18 @@ en `gcloud`, así que debes ejecutarlo tú, no yo. Ver
 paso (build, push, `gcloud run deploy`, y cómo conectar la URL resultante
 en `servers_config.json`).
 
+### Análisis con Wireshark
+
+[`docs/wireshark_analysis.md`](docs/wireshark_analysis.md) captura y
+clasifica cada mensaje JSON-RPC intercambiado sobre este transporte
+(sincronización vs. solicitud vs. respuesta) con evidencia real de
+paquetes desde
+[`docs/wireshark/local_capture.pcapng`](docs/wireshark/local_capture.pcapng),
+más la explicación de capas OSI/TCP-IP que pide el enunciado. Esa
+captura es contra el servidor corriendo localmente; el mismo documento
+explica cómo repetirla contra el despliegue real en Cloud Run cuando lo
+tengas.
+
 ## Estructura del proyecto
 
 ```
@@ -335,7 +347,9 @@ CC3067-Proyecto-1/
 |   `-- test_stdio_client.py  # smoke test del cliente MCP genérico
 |-- docs/
 |   |-- lims_mcp_server_spec.md  # especificación completa del protocolo/herramientas
-|   `-- deployment.md            # guía de despliegue en Google Cloud Run
+|   |-- deployment.md            # guía de despliegue en Google Cloud Run
+|   |-- wireshark_analysis.md    # clasificación de mensajes JSON-RPC + capas OSI/TCP-IP
+|   `-- wireshark/local_capture.pcapng  # captura real que respalda ese análisis
 |-- Dockerfile             # imagen de contenedor para el servidor remoto
 |-- data/                 # aquí se crean data/lims.db y logs/ (ignorado por git)
 |-- workspace/            # raíz sandbox para la demo Filesystem/Git MCP (ignorado por git)

@@ -57,7 +57,7 @@ Wireshark traffic analysis.
 - [x] Anthropic API chatbot host, session context, Filesystem + Git MCP demo scenario
 - [x] Remote transport for the LIMS server (HTTP + SSE, manual, same tools/business logic as the stdio server) + Dockerfile
 - [ ] Actual deployment to Google Cloud Run (needs your GCP account -- see below)
-- [ ] Wireshark capture and JSON-RPC message classification
+- [x] Wireshark capture and JSON-RPC message classification (local reference capture; repeat against the real Cloud Run deployment for the final submission -- see `docs/wireshark_analysis.md`)
 - [ ] Final report (spec, OSI/TCP-IP layer analysis, conclusions)
 
 ## Requirements
@@ -290,6 +290,17 @@ so it has to be run by you, not from here. See
 guide (build, push, `gcloud run deploy`, and how to plug the resulting
 URL into `servers_config.json`).
 
+### Wireshark analysis
+
+[`docs/wireshark_analysis.md`](docs/wireshark_analysis.md) captures and
+classifies every JSON-RPC message exchanged over this transport
+(synchronization vs. request vs. response) with real packet evidence
+from [`docs/wireshark/local_capture.pcapng`](docs/wireshark/local_capture.pcapng),
+plus the OSI/TCP-IP layer explanation the assignment asks for. That
+capture is against the server running locally; the same document
+explains how to repeat it against the real Cloud Run deployment once you
+have one.
+
 ## Project structure
 
 ```
@@ -318,7 +329,9 @@ CC3067-Proyecto-1/
 |   `-- test_stdio_client.py  # smoke test for the generic MCP client
 |-- docs/
 |   |-- lims_mcp_server_spec.md  # full tool/protocol specification
-|   `-- deployment.md            # Google Cloud Run deployment walkthrough
+|   |-- deployment.md            # Google Cloud Run deployment walkthrough
+|   |-- wireshark_analysis.md    # JSON-RPC message classification + OSI/TCP-IP layers
+|   `-- wireshark/local_capture.pcapng  # real capture backing that analysis
 |-- Dockerfile             # container image for the remote server
 |-- data/                 # data/lims.db and logs/ are created here (git-ignored)
 |-- workspace/            # sandbox root for the Filesystem/Git MCP demo (git-ignored)
