@@ -5,31 +5,32 @@ interaction between the host and the MCP server, classifying which
 JSON-RPC messages are synchronization, request, or response messages,
 and explaining what happens at each OSI/TCP-IP layer.
 
-## Two captures, one procedure
+## Two captures
 
-**What's here now** is a capture of the chatbot talking to the LIMS
-server **running locally** (`python -m lims_mcp_server.http_server` on
-`127.0.0.1:8080`), captured on Windows' Npcap loopback adapter with
-`dumpcap`/`tshark` and committed at
-[`docs/wireshark/local_capture.pcapng`](wireshark/local_capture.pcapng).
-It exercises the exact same HTTP + SSE transport
-([`lims_mcp_server/http_server.py`](../lims_mcp_server/http_server.py))
-that runs on Cloud Run -- only the network path differs (loopback vs. the
-real internet + TLS) -- so every JSON-RPC message shape, the session
-handshake, and the classification below are representative of the real
-remote traffic too.
+Two full captures of the same 7-message exchange (`initialize` ->
+`notifications/initialized` -> `tools/list` -> 4x `tools/call`) were
+taken and are both committed here, on purpose, as a side-by-side
+comparison:
 
-**What the assignment additionally asks for** ("Análisis de la
-comunicación entre el **servidor remoto** y el cliente") is a capture
-against the actually-deployed Cloud Run instance. That requires your own
-GCP deployment (see [`docs/deployment.md`](deployment.md)), so it has to
-be captured by you. The procedure is identical to the one used here --
-repeat the steps below against the deployed service, save the new
-`.pcapng`, and redo the classification table with the real frame
-numbers. Because Cloud Run terminates TLS, that capture will show an
-encrypted TLS handshake and encrypted application data instead of
-plaintext HTTP by default; see "Capturing the real remote traffic" below
-for how to still see the JSON-RPC payloads.
+1. **[`local_capture.pcapng`](wireshark/local_capture.pcapng)** -- the
+   chatbot talking to the LIMS server **running locally**
+   (`python -m lims_mcp_server.http_server` on `127.0.0.1:8080`),
+   captured on Windows' Npcap loopback adapter. Plaintext HTTP, so every
+   JSON-RPC byte is directly visible -- this is the one the detailed
+   frame-by-frame evidence below is drawn from.
+2. **[`remote_capture.pcapng`](wireshark/remote_capture.pcapng)** -- the
+   same exchange, this time against the **actually-deployed remote
+   server** ("Análisis de la comunicación entre el servidor remoto y el
+   cliente", per the assignment): `https://cc3067-lims-mcp.onrender.com`
+   (see [`docs/deployment.md`](deployment.md) for why Render instead of
+   Cloud Run), captured on the machine's real Wi-Fi interface. This one
+   is real HTTPS -- a genuine Ethernet frame, real routing, and a TLS
+   handshake in front of the same JSON-RPC exchange, which the "Local vs.
+   remote" section below compares directly against capture #1.
+
+Both were produced with the exact same driver script (a plain Python
+snippet using `chatbot/mcp/http_client.py`), so the only variable
+between them is local-plaintext vs. remote-TLS.
 
 ## How this capture was produced
 
@@ -178,65 +179,84 @@ then a FIN/ACK exchange in both directions to close.
 Based directly on the packets above (frame 1, expanded with `tshark -V`,
 is the worked example):
 
-- **Link layer.** This capture was taken on Npcap's loopback adapter, so
-  Wireshark shows a **Null/Loopback** pseudo-header (`Encapsulation
-  type: NULL/Loopback`, "Protocols in frame: `null:ip:tcp`") instead of
-  a real link-layer frame -- loopback traffic never actually goes onto a
-  wire or over the air, so there is no Ethernet/802.11 header, no MAC
-  addresses, and no ARP. **A real capture against the deployed Cloud Run
-  service would show a genuine Ethernet II frame** (source/destination
-  MAC addresses of your NIC and default gateway) since that traffic
-  really does leave the machine over its network interface.
-- **Network layer (IP).** Every packet carries `Internet Protocol
-  Version 4, Src: 127.0.0.1, Dst: 127.0.0.1` -- both endpoints are the
-  same host, so routing is trivial (no gateway hop). `TTL=128` is the
-  Windows default, `Don't Fragment` is set, and there's no fragmentation
-  since every segment is well under the loopback MTU. Against the real
-  remote server, this layer is where the actual routing across the
-  internet to Cloud Run's IP happens, and the source address would be
-  your machine's real (likely NATed) IP instead of `127.0.0.1`.
-- **Transport layer (TCP).** Each of the 7 JSON-RPC messages rides its
-  own TCP connection: a 3-way handshake (`SYN` -> `SYN, ACK` -> `ACK`,
-  frames 1-3 for the first one), then the HTTP request/response
-  segments (`PSH, ACK`), then a 4-way close (`FIN, ACK` from each side).
-  TCP is what gives the JSON-RPC exchange reliable, in-order delivery
-  over the connectionless IP layer below it -- this is also *why* HTTP
-  (and therefore MCP's Streamable HTTP transport) is built on TCP rather
-  than UDP: JSON-RPC messages must arrive complete and in order, or the
-  JSON parsing in `http_server.py`/`http_client.py` would break. Against
-  the real remote deployment, this same TCP handshake happens first,
-  and then a **TLS handshake** happens on top of it before any HTTP
-  bytes are sent (Cloud Run terminates HTTPS), which is the biggest
-  structural difference from this local capture.
-- **Application layer (HTTP + SSE + JSON-RPC).** This is where the
-  actual MCP protocol lives, in three nested layers of framing: **HTTP**
-  (`POST /mcp`, headers, status codes) carries **SSE** (`Content-Type:
-  text/event-stream`, `event: message` / `data: ...` framing) which
-  carries a **JSON-RPC 2.0** message (`{"jsonrpc": "2.0", "id": ...,
-  "method"/"result": ...}`) as the `data:` payload. The `Mcp-Session-Id`
-  header is MCP-specific application-layer state layered on top of
-  plain HTTP, used to correlate the otherwise-stateless HTTP requests
-  above into one logical MCP session.
+- **Link layer.** The **local** capture was taken on Npcap's loopback
+  adapter, so Wireshark shows a **Null/Loopback** pseudo-header
+  (`Encapsulation type: NULL/Loopback`, "Protocols in frame:
+  `null:ip:tcp`") instead of a real link-layer frame -- loopback traffic
+  never actually goes onto a wire or over the air, so there is no
+  Ethernet/802.11 header, no MAC addresses, and no ARP. The **remote**
+  capture, taken on the real Wi-Fi adapter, shows exactly what that
+  local capture couldn't: a genuine **Ethernet II** frame,
+  `Src: AzureWaveTec_b1:8f:d7 (70:66:55:b1:8f:d7)` (the laptop's Wi-Fi
+  NIC) `Dst: BaoanGaokeEl_28:a2:d5 (00:16:78:28:a2:d5)` (the home
+  router's MAC) -- confirmed directly from `tshark -V` on frame 1 of
+  `remote_capture.pcapng`.
+- **Network layer (IP).** The local capture is `127.0.0.1 -> 127.0.0.1`
+  (same host, no real routing). The remote capture shows real IPv4
+  routing: `192.168.11.230` (the laptop's private LAN address) ->
+  `216.24.57.7` (Render's edge, actually a Cloudflare-fronted address
+  for `cc3067-lims-mcp.onrender.com` -- confirmed with `nslookup`, which
+  resolved the hostname through `*.cdn.cloudflare.net`). The private
+  source address is NATed by the home router before reaching the public
+  internet, which Wireshark on the client side can't show directly (that
+  translation happens on the router, past this capture point).
+- **Transport layer (TCP).** Both captures show the same underlying
+  pattern: **7 independent TCP connections**, one per JSON-RPC message
+  (`chatbot/mcp/http_client.py`'s `urllib` calls don't reuse
+  connections), each with its own 3-way handshake (`SYN` -> `SYN, ACK`
+  -> `ACK`). `tshark -z conv,tcp` on the remote capture confirms exactly
+  7 conversations to `216.24.57.7:443` (plus one short 2-frame outlier to
+  a second Cloudflare edge IP, `216.24.57.15`, from a connection that got
+  redirected to a different edge node). The one structural difference:
+  several of the remote connections end in a **TCP `RST`** rather than a
+  clean `FIN`/`FIN,ACK` exchange (visible in `remote_capture.pcapng`,
+  e.g. frame 17) -- consistent with the CDN/proxy in front of Render
+  aggressively tearing down short-lived HTTP/1.0 `Connection: close`
+  connections instead of waiting out a graceful 4-way close, something
+  the local Python `http.server` never does. TCP is what gives the
+  JSON-RPC exchange reliable, in-order delivery over the connectionless
+  IP layer below it either way -- this is also *why* HTTP (and therefore
+  MCP's Streamable HTTP transport) is built on TCP rather than UDP:
+  JSON-RPC messages must arrive complete and in order, or the JSON
+  parsing in `http_server.py`/`http_client.py` would break.
+- **Application layer (HTTP + SSE + JSON-RPC, plus TLS on the remote
+  path).** Locally, this is three nested framings: **HTTP** (`POST
+  /mcp`, headers, status codes) carries **SSE** (`Content-Type:
+  text/event-stream`, `event: message` / `data: ...`) carries **JSON-RPC
+  2.0** (`{"jsonrpc": "2.0", "id": ..., "method"/"result": ...}`) as the
+  `data:` payload -- all readable in plaintext, as shown in the raw
+  evidence above. On the remote path, `tshark -z io,phs` on
+  `remote_capture.pcapng` shows a **`tls`** layer sitting between TCP and
+  where HTTP would be (59 of 130 frames, 40444 of 47167 bytes): a real
+  **TLS handshake** (`ClientHello` -> `ServerHello` -> certificate ->
+  `ChangeCipherSpec`, record content types `22`/`20` in the capture)
+  happens first, and every JSON-RPC byte after that travels inside
+  encrypted **TLS Application Data** records instead of a plaintext HTTP
+  body -- Wireshark cannot show the `POST /mcp` line or the JSON itself
+  for this capture, only that *some* request went out and *some*
+  response came back, with what size and timing. The `Mcp-Session-Id`
+  header is MCP-specific application-layer state layered on top of HTTP
+  either way, correlating otherwise-stateless requests into one logical
+  MCP session -- it's just additionally encrypted on the remote path.
 
-## Capturing the real remote traffic
+## Local vs. remote, side by side
 
-To get an equivalent capture against the actually-deployed Cloud Run
-server for the final report:
+| | Local (`local_capture.pcapng`) | Remote (`remote_capture.pcapng`) |
+|---|---|---|
+| Target | `127.0.0.1:8080` | `cc3067-lims-mcp.onrender.com` (`216.24.57.7:443`) |
+| Capture interface | Npcap loopback adapter | Wi-Fi (real NIC) |
+| Link layer | Null/Loopback pseudo-header | Real Ethernet II, real MAC addresses |
+| Network layer | `127.0.0.1 -> 127.0.0.1` | `192.168.11.230 -> 216.24.57.7`, real internet routing |
+| Security | None (plaintext) | TLS (`ClientHello`/`ServerHello`, encrypted Application Data) |
+| JSON-RPC visible in Wireshark? | Yes, directly | No -- encrypted; only size/timing/direction are visible without decrypting the session |
+| TCP connections | 7 (one per message), clean `FIN` closes | 7 (one per message) + 1 outlier, some closed with `RST` instead of `FIN` |
+| Total frames / bytes | 103 frames / 16,396 bytes | 130 frames / 47,167 bytes (TLS overhead) |
 
-1. Deploy per [`docs/deployment.md`](deployment.md) and get the Service
-   URL.
-2. Point `chatbot/servers_config.json`'s `lims-remote` entry at it and
-   enable it (disable local `lims`).
-3. Start a capture on your real network interface (not loopback),
-   filtered to the Cloud Run host, e.g. `host <resolved-ip> and tcp port
-   443`.
-4. Run `python -m chatbot.host` and exercise the same tools as above.
-5. You'll see a TLS handshake (`Client Hello` / `Server Hello` /
-   certificate exchange) instead of plaintext HTTP, and the JSON-RPC
-   payloads will be encrypted (`Application Data` records) -- this is
-   expected and is itself the right thing to report: the same
-   synchronization/request/response classification above still applies
-   logically (you can still tell requests from responses by direction
-   and timing, and TLS Application Data length), you just can't read the
-   JSON bodies without decrypting the session (e.g. via
-   `SSLKEYLOGFILE`, noted in `docs/deployment.md`).
+The synchronization/request/response classification from the section
+above is identical on both -- it's a property of the JSON-RPC/MCP
+message sequence, not of the transport security wrapping it. What
+changes between them is exactly what you'd expect from adding TLS and a
+real network hop: a handshake before anything else, more bytes on the
+wire, and the payload itself becoming opaque to a passive observer --
+which is, in fact, the entire point of deploying this over HTTPS instead
+of plain HTTP.

@@ -24,7 +24,11 @@ class MCPError(Exception):
 
 
 class MCPHTTPClient:
-    def __init__(self, name, base_url, logger=None, timeout=15):
+    def __init__(self, name, base_url, logger=None, timeout=60):
+        # 60s default: Render's free tier can take 30-60s to wake a sleeping
+        # instance on the first request after inactivity (see deployment.md).
+        # A short timeout here fails the *entire* chatbot startup, not just
+        # one slow call, since connect_servers() calls initialize() once.
         self.name = name
         self.base_url = base_url.rstrip("/")
         self.logger = logger

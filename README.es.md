@@ -30,8 +30,9 @@ permitiría al personal del laboratorio preguntar cosas como:
 - *"Dame el reporte de la muestra LIMS-2026-0032."*
 
 Especificación completa, esquemas de cada herramienta y ejemplos de uso:
-[`docs/lims_mcp_server_spec.md`](docs/lims_mcp_server_spec.md) (en
-inglés).
+[`docs/lims_mcp_server_spec.es.md`](docs/lims_mcp_server_spec.es.md)
+(la versión oficial en inglés es
+[`docs/lims_mcp_server_spec.md`](docs/lims_mcp_server_spec.md)).
 
 ## Funcionalidades implementadas en esta entrega
 
@@ -63,11 +64,11 @@ Wireshark.
 
 - [x] Servidor MCP local LIMS (`lims_mcp_server/`), JSON-RPC manual sobre stdio
 - [x] Cliente MCP genérico + logger de interacciones (`chatbot/`), verificado contra el servidor LIMS (`chatbot/tests/test_stdio_client.py`)
-- [x] Chatbot host con API de Anthropic, contexto de sesión, escenario demo Filesystem + Git MCP
+- [x] Chatbot host con API de Anthropic, contexto de sesión, escenario demo Filesystem + Git MCP -- **verificado en vivo** contra la API real de Anthropic y el servidor remoto real desplegado (ver `docs/REPORT.es.md`)
 - [x] Transporte remoto para el servidor LIMS (HTTP + SSE, manual, misma lógica/tools que el servidor stdio) + Dockerfile
-- [ ] Despliegue real en Google Cloud Run (requiere tu cuenta de GCP -- ver abajo)
-- [x] Captura con Wireshark y clasificación de mensajes JSON-RPC (captura local de referencia; repetir contra el despliegue real en Cloud Run para la entrega final -- ver `docs/wireshark_analysis.md`)
-- [ ] Reporte final (especificación, análisis de capas OSI/TCP-IP, conclusiones)
+- [x] Despliegue remoto real -- `https://cc3067-lims-mcp.onrender.com` (Render en vez de Cloud Run; GCP pedía tarjeta de facturación incluso para la capa gratis -- ver `docs/deployment.es.md`)
+- [x] Captura con Wireshark y clasificación de mensajes JSON-RPC, **ambas** local (loopback, texto plano) y contra el servidor remoto real desplegado (Ethernet real + TLS) -- ver `docs/wireshark_analysis.es.md`
+- [x] Reporte final (especificación, análisis de capas OSI/TCP-IP, conclusiones) -- ver [`docs/REPORT.es.md`](docs/REPORT.es.md)
 
 ## Requisitos
 
@@ -266,7 +267,7 @@ HTTP" de MCP, construido sobre `http.server` de la librería estándar
   posterior debe reenviar ese header, o el servidor responde `400`
   (falta) / `404` (sesión desconocida) -- verificado con `curl` durante
   el desarrollo.
-- `GET /health` es un liveness probe simple para Cloud Run. `GET /mcp`
+- `GET /health` es un liveness probe simple (lo usan tanto Cloud Run como los health checks de Render). `GET /mcp`
   responde `405` a propósito: cada tool de LIMS es una llamada síncrona
   rápida, así que el servidor nunca necesita el stream opcional de
   mensajes iniciados por el servidor que también permite el spec.
@@ -293,31 +294,43 @@ curl http://localhost:8080/health
 
 ### Usarlo desde el chatbot
 
-Edita `chatbot/servers_config.json`: pon `"enabled": false` en la entrada
-local `lims` y `"enabled": true` (con el `base_url` real) en
-`lims-remote`, luego ejecuta `python -m chatbot.host` normalmente -- el
-host no necesita ningún otro cambio, ya que ambos clientes implementan
-la misma interfaz.
+`chatbot/servers_config.json` ya apunta al despliegue real: `lims-remote`
+tiene `"enabled": true` con `base_url` en
+`https://cc3067-lims-mcp.onrender.com`, y la entrada local `lims` está
+deshabilitada (ambas exponen los mismos nombres de tools, así que solo
+una puede estar activa a la vez). Solo ejecuta `python -m chatbot.host`
+-- no necesitas configurar nada más. Para volver a usar el servidor
+local, invierte las dos banderas `enabled`.
 
-### Desplegar en Google Cloud Run
+La instancia gratuita de Render se "duerme" tras 15 minutos sin uso, así
+que la primera petición después de un rato puede tardar 30-60 segundos
+en responder (`curl https://cc3067-lims-mcp.onrender.com/health` antes
+si quieres tenerlo "despierto" para una demo en vivo).
 
-El despliegue requiere tu propia cuenta de Google Cloud y sesión iniciada
-en `gcloud`, así que debes ejecutarlo tú, no yo. Ver
-[`docs/deployment.md`](docs/deployment.md) para la guía completa paso a
-paso (build, push, `gcloud run deploy`, y cómo conectar la URL resultante
-en `servers_config.json`).
+### Desplegarlo tú mismo
+
+El despliegue real de arriba corre en **Render**, no en Google Cloud Run
+como se propuso originalmente -- GCP exige una tarjeta de facturación en
+la cuenta antes de que Cloud Run (o Cloud Build) haga cualquier cosa,
+incluso para quedarte dentro de la capa gratis, y la capa gratuita de
+Render no pide tarjeta. Ver
+[`docs/deployment.es.md`](docs/deployment.es.md) para la historia
+completa, los pasos exactos usados, y la guía original de Cloud Run
+(que se conserva completa, por si prefieres ese camino teniendo ya tu
+facturación configurada).
 
 ### Análisis con Wireshark
 
-[`docs/wireshark_analysis.md`](docs/wireshark_analysis.md) captura y
+[`docs/wireshark_analysis.es.md`](docs/wireshark_analysis.es.md) captura y
 clasifica cada mensaje JSON-RPC intercambiado sobre este transporte
-(sincronización vs. solicitud vs. respuesta) con evidencia real de
-paquetes desde
-[`docs/wireshark/local_capture.pcapng`](docs/wireshark/local_capture.pcapng),
-más la explicación de capas OSI/TCP-IP que pide el enunciado. Esa
-captura es contra el servidor corriendo localmente; el mismo documento
-explica cómo repetirla contra el despliegue real en Cloud Run cuando lo
-tengas.
+(sincronización vs. solicitud vs. respuesta), con **dos** capturas
+reales lado a lado: una local
+([`local_capture.pcapng`](docs/wireshark/local_capture.pcapng), texto
+plano, cada byte JSON-RPC visible) y otra contra el servidor remoto
+realmente desplegado
+([`remote_capture.pcapng`](docs/wireshark/remote_capture.pcapng),
+Ethernet real + enrutamiento real + TLS), más la explicación de capas
+OSI/TCP-IP que pide el enunciado, basada en ambas.
 
 ## Estructura del proyecto
 
@@ -346,10 +359,15 @@ CC3067-Proyecto-1/
 |-- chatbot/tests/
 |   `-- test_stdio_client.py  # smoke test del cliente MCP genérico
 |-- docs/
-|   |-- lims_mcp_server_spec.md  # especificación completa del protocolo/herramientas
-|   |-- deployment.md            # guía de despliegue en Google Cloud Run
-|   |-- wireshark_analysis.md    # clasificación de mensajes JSON-RPC + capas OSI/TCP-IP
-|   `-- wireshark/local_capture.pcapng  # captura real que respalda ese análisis
+|   |-- lims_mcp_server_spec.md     # especificación completa del protocolo/herramientas (oficial, inglés)
+|   |-- lims_mcp_server_spec.es.md  # -- versión en español
+|   |-- deployment.md               # guía de despliegue remoto (Render + Cloud Run)
+|   |-- deployment.es.md            # -- versión en español
+|   |-- wireshark_analysis.md       # clasificación de mensajes JSON-RPC + capas OSI/TCP-IP
+|   |-- wireshark_analysis.es.md    # -- versión en español
+|   |-- wireshark/                  # local_capture.pcapng + remote_capture.pcapng que respaldan ese análisis
+|   |-- REPORT.md                   # reporte final: resumen de especificación, análisis de capas, conclusiones
+|   `-- REPORT.es.md                # -- versión en español
 |-- Dockerfile             # imagen de contenedor para el servidor remoto
 |-- data/                 # aquí se crean data/lims.db y logs/ (ignorado por git)
 |-- workspace/            # raíz sandbox para la demo Filesystem/Git MCP (ignorado por git)
@@ -392,8 +410,3 @@ CC3067-Proyecto-1/
   manejo de sesión. `ThreadingHTTPServer` atiende solicitudes de forma
   concurrente, por lo que un lock serializa el acceso a la conexión
   SQLite compartida entre hilos.
-
-## Integridad académica
-
-Desarrollado individualmente para CC3067 - Redes, UVG. No se usó ninguna
-librería o SDK de MCP de terceros, según lo exige el enunciado.

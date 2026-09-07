@@ -17,16 +17,17 @@
     {
       "name": "lims",
       "transport": "stdio",
+      "enabled": false,
       "command": "python",
       "args": ["-m", "lims_mcp_server.server"],
-      "description": "Custom local LIMS food-safety lab MCP server (this repository)."
+      "description": "Custom local LIMS food-safety lab MCP server (this repository). Disabled by default now that the remote deployment below is live -- flip the 'enabled' flags to switch back to local."
     },
     {
       "name": "lims-remote",
       "transport": "http",
-      "enabled": false,
-      "base_url": "https://REPLACE-WITH-YOUR-CLOUD-RUN-URL.run.app",
-      "description": "Same LIMS server as 'lims', deployed remotely over HTTP+SSE (Google Cloud Run). Disabled until you deploy it and fill in base_url -- see the README's remote deployment section. Enable this and disable 'lims' to make the chatbot use the remote server instead of the local one."
+      "enabled": true,
+      "base_url": "https://cc3067-lims-mcp.onrender.com",
+      "description": "Same LIMS server as 'lims', deployed remotely over HTTP+SSE on Render (see docs/deployment.md for why Render instead of Cloud Run). Verified live: initialize, session handling, tools/list and tools/call all confirmed working end-to-end against this URL."
     }
   ]
 }

@@ -54,11 +54,11 @@ Wireshark traffic analysis.
 
 - [x] Local LIMS MCP server (`lims_mcp_server/`), manual JSON-RPC over stdio
 - [x] Generic MCP client + interaction logger (`chatbot/`), verified against the LIMS server (`chatbot/tests/test_stdio_client.py`)
-- [x] Anthropic API chatbot host, session context, Filesystem + Git MCP demo scenario
+- [x] Anthropic API chatbot host, session context, Filesystem + Git MCP demo scenario -- **verified live** against the real Anthropic API and the real deployed remote server (see `docs/REPORT.md`)
 - [x] Remote transport for the LIMS server (HTTP + SSE, manual, same tools/business logic as the stdio server) + Dockerfile
-- [ ] Actual deployment to Google Cloud Run (needs your GCP account -- see below)
-- [x] Wireshark capture and JSON-RPC message classification (local reference capture; repeat against the real Cloud Run deployment for the final submission -- see `docs/wireshark_analysis.md`)
-- [ ] Final report (spec, OSI/TCP-IP layer analysis, conclusions)
+- [x] Live remote deployment -- `https://cc3067-lims-mcp.onrender.com` (Render instead of Cloud Run; GCP required a billing card even for the free tier -- see `docs/deployment.md` for why)
+- [x] Wireshark capture and JSON-RPC message classification, **both** local (loopback, plaintext) and against the real deployed remote server (real Ethernet + TLS) -- see `docs/wireshark_analysis.md`
+- [x] Final report (spec, OSI/TCP-IP layer analysis, conclusions) -- see [`docs/REPORT.md`](docs/REPORT.md)
 
 ## Requirements
 
@@ -249,7 +249,8 @@ no MCP SDK).
 - `initialize` responds with an `Mcp-Session-Id` header; every later call
   must echo that header back, or the server answers `400` (missing) /
   `404` (unknown session) -- verified with `curl` during development.
-- `GET /health` is a plain liveness probe for Cloud Run. `GET /mcp`
+- `GET /health` is a plain liveness probe (used by both Cloud Run and
+  Render's health checks). `GET /mcp`
   intentionally returns `405`: every LIMS tool is a quick synchronous
   call, so the server never needs the optional server-initiated push
   stream the spec also allows for.
@@ -276,30 +277,38 @@ curl http://localhost:8080/health
 
 ### Use it from the chatbot
 
-Edit `chatbot/servers_config.json`: set `"enabled": false` on the local
-`lims` entry and `"enabled": true` (with the real `base_url`) on
-`lims-remote`, then run `python -m chatbot.host` as usual -- the host
-doesn't need any other change, since both clients implement the same
-interface.
+`chatbot/servers_config.json` is already pointed at the live deployment:
+`lims-remote` is `"enabled": true` with `base_url` set to
+`https://cc3067-lims-mcp.onrender.com`, and the local `lims` entry is
+disabled (both expose the same tool names, so only one can be active at
+a time). Just run `python -m chatbot.host` -- no further setup needed.
+To use the local server instead, flip the two `enabled` flags back.
 
-### Deploying to Google Cloud Run
+Render's free instance spins down after 15 minutes of inactivity, so the
+first request after a while can take 30-60 seconds to wake it back up
+(`curl https://cc3067-lims-mcp.onrender.com/health` beforehand if you
+want it warm for a live demo).
 
-Deploying requires your own Google Cloud account and `gcloud` CLI login,
-so it has to be run by you, not from here. See
-[`docs/deployment.md`](docs/deployment.md) for the full step-by-step
-guide (build, push, `gcloud run deploy`, and how to plug the resulting
-URL into `servers_config.json`).
+### Deploying it yourself
+
+The live deployment above runs on **Render**, not Google Cloud Run as
+originally proposed -- GCP requires a billing card on the account before
+Cloud Run (or Cloud Build) will do anything at all, even to stay inside
+the free tier, and Render's free web-service tier needs no card. See
+[`docs/deployment.md`](docs/deployment.md) for the full story, the exact
+steps used, and the original Cloud Run walkthrough (kept in full, in
+case you'd rather use that path with your own billing already set up).
 
 ### Wireshark analysis
 
 [`docs/wireshark_analysis.md`](docs/wireshark_analysis.md) captures and
 classifies every JSON-RPC message exchanged over this transport
-(synchronization vs. request vs. response) with real packet evidence
-from [`docs/wireshark/local_capture.pcapng`](docs/wireshark/local_capture.pcapng),
-plus the OSI/TCP-IP layer explanation the assignment asks for. That
-capture is against the server running locally; the same document
-explains how to repeat it against the real Cloud Run deployment once you
-have one.
+(synchronization vs. request vs. response), with **two** real captures
+side by side: one local ([`local_capture.pcapng`](docs/wireshark/local_capture.pcapng),
+plaintext, every JSON-RPC byte visible) and one against the actual
+deployed remote server ([`remote_capture.pcapng`](docs/wireshark/remote_capture.pcapng),
+real Ethernet + real routing + TLS), plus the OSI/TCP-IP layer
+explanation the assignment asks for, drawn from both.
 
 ## Project structure
 
@@ -328,10 +337,15 @@ CC3067-Proyecto-1/
 |-- chatbot/tests/
 |   `-- test_stdio_client.py  # smoke test for the generic MCP client
 |-- docs/
-|   |-- lims_mcp_server_spec.md  # full tool/protocol specification
-|   |-- deployment.md            # Google Cloud Run deployment walkthrough
-|   |-- wireshark_analysis.md    # JSON-RPC message classification + OSI/TCP-IP layers
-|   `-- wireshark/local_capture.pcapng  # real capture backing that analysis
+|   |-- lims_mcp_server_spec.md     # full tool/protocol specification
+|   |-- lims_mcp_server_spec.es.md  # -- Spanish translation
+|   |-- deployment.md               # remote deployment walkthrough (Render + Cloud Run)
+|   |-- deployment.es.md            # -- Spanish translation
+|   |-- wireshark_analysis.md       # JSON-RPC message classification + OSI/TCP-IP layers
+|   |-- wireshark_analysis.es.md    # -- Spanish translation
+|   |-- wireshark/                  # local_capture.pcapng + remote_capture.pcapng backing that analysis
+|   |-- REPORT.md                   # final report: spec summary, layer analysis, conclusions
+|   `-- REPORT.es.md                # -- Spanish translation
 |-- Dockerfile             # container image for the remote server
 |-- data/                 # data/lims.db and logs/ are created here (git-ignored)
 |-- workspace/            # sandbox root for the Filesystem/Git MCP demo (git-ignored)
@@ -370,9 +384,3 @@ CC3067-Proyecto-1/
   framing (newline-delimited stdio vs. HTTP + SSE) and session handling
   differ. `ThreadingHTTPServer` serves requests concurrently, so a single
   lock serializes access to the shared SQLite connection across threads.
-
-## Academic integrity
-
-Developed individually for CC3067 - Redes, UVG. No third-party MCP
-libraries or SDKs were used, per the assignment's requirements.
-

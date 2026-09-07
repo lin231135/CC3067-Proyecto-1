@@ -16,8 +16,8 @@ from pathlib import Path
 
 from .anthropic_client import AnthropicClient, AnthropicError
 from .logging_utils import InteractionLogger
-from .mcp.http_client import MCPHTTPClient
-from .mcp.stdio_client import MCPError, MCPStdioClient
+from .mcp.http_client import MCPError as HTTPMCPError, MCPHTTPClient
+from .mcp.stdio_client import MCPError as StdioMCPError, MCPStdioClient
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SERVERS_CONFIG_PATH = Path(__file__).resolve().parent / "servers_config.json"
@@ -89,7 +89,12 @@ def connect_servers(logger):
         name = entry["name"]
         try:
             if entry.get("transport") == "http":
-                client = MCPHTTPClient(name=name, base_url=entry["base_url"], logger=logger)
+                print(f"[host] Connecting to '{name}' ({entry['base_url']})... "
+                      f"may take up to a minute if the server was asleep.", file=sys.stderr)
+                client = MCPHTTPClient(
+                    name=name, base_url=entry["base_url"], logger=logger,
+                    timeout=entry.get("timeout", 60),
+                )
             else:
                 client = MCPStdioClient(
                     name=name,
@@ -127,10 +132,27 @@ def run_tool(clients, tool_to_server, tool_name, arguments):
     server_name = tool_to_server.get(tool_name)
     if server_name is None:
         return {"isError": True, "content": [{"type": "text", "text": f"Unknown tool: {tool_name}"}]}
+
+    client = clients[server_name]
     try:
-        return clients[server_name].call_tool(tool_name, arguments)
-    except MCPError as exc:
+        return client.call_tool(tool_name, arguments)
+    except (StdioMCPError, HTTPMCPError) as exc:
+        # A remote server (e.g. Render's free tier recycling an idle
+        # instance) can restart and forget our Mcp-Session-Id mid-chat.
+        # Re-establish the session once and retry before surfacing an
+        # error, instead of leaving every later call broken for the rest
+        # of the conversation.
+        if isinstance(client, MCPHTTPClient) and "session" in str(exc).lower():
+            try:
+                print(f"[host] '{server_name}' session expired, reconnecting...", file=sys.stderr)
+                client.initialize()
+                return client.call_tool(tool_name, arguments)
+            except Exception as retry_exc:  # noqa: BLE001
+                return {"isError": True, "content": [{"type": "text", "text": f"'{server_name}' reconnect failed: {retry_exc}"}]}
         return {"isError": True, "content": [{"type": "text", "text": str(exc)}]}
+    except Exception as exc:  # noqa: BLE001 - a tool failure must never crash the whole chatbot
+        print(f"[host] Unexpected error calling '{tool_name}' on '{server_name}': {exc!r}", file=sys.stderr)
+        return {"isError": True, "content": [{"type": "text", "text": f"Internal error calling tool '{tool_name}': {exc}"}]}
 
 
 def agent_turn(anthropic_client, messages, tools, clients, tool_to_server):
@@ -164,6 +186,13 @@ def agent_turn(anthropic_client, messages, tools, clients, tool_to_server):
 
 
 def main():
+    # Claude's replies may contain Unicode (checkmarks, emoji, accented text)
+    # that the default Windows console codepage (cp1252) can't encode,
+    # crashing the whole chatbot mid-conversation on a plain `print()`.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
     load_env_file(REPO_ROOT / ".env")
     bootstrap_demo_repo()
 
@@ -210,6 +239,10 @@ def main():
             except AnthropicError as exc:
                 print(f"[error] {exc}")
                 messages.pop()  # drop the failed turn so a retry starts clean
+                continue
+            except Exception as exc:  # noqa: BLE001 - one bad turn must never kill the whole session
+                print(f"[error] Unexpected failure this turn: {exc!r}")
+                messages.pop()
                 continue
             print(f"\nAssistant: {reply}\n")
     finally:
